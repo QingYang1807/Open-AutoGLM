@@ -9,11 +9,13 @@
     👋 加入我们的 <a href="resources/WECHAT.md" target="_blank">微信</a> 社区
 </p>
 
-## 快速开始
-你可以使用 claude code，输入以下 prompt，快速部署本项目
+## 懒人版快速安装
+
+你可以使用Claude Code，配置 [GLM Coding Plan](https://bigmodel.cn/glm-coding) 后，输入以下提示词，快速部署本项目。
+
 ```
 访问文档，为我安装 AutoGLM
-https://raw.githubusercontent.com/zai-org/Open-AutoGLM/refs/heads/main/README.md\
+https://raw.githubusercontent.com/zai-org/Open-AutoGLM/refs/heads/main/README.md
 ```
 
 ## 项目介绍
