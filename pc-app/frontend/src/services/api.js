@@ -23,6 +23,26 @@ export const api = {
         return res.json();
     },
 
+    // Multi-turn Session
+    continueSession: async (message) => {
+        const res = await fetch(`${API_BASE}/continue`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+        });
+        return res.json();
+    },
+
+    endSession: async () => {
+        const res = await fetch(`${API_BASE}/session/end`, { method: 'POST' });
+        return res.json();
+    },
+
+    getSessionStatus: async () => {
+        const res = await fetch(`${API_BASE}/session/status`);
+        return res.json();
+    },
+
     // Queue Management
     getQueue: async () => {
         const res = await fetch(`${API_BASE}/queue/list`);

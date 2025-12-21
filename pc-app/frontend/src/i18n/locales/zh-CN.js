@@ -113,6 +113,12 @@ const zhCN = {
         failedToRemove: '无法移除',
         taskRestored: '任务已恢复',
         autoBackupComplete: '自动备份已完成',
+        // 多轮对话
+        continuingTask: '继续执行中...',
+        failedToContinue: '无法继续任务',
+        taskStarted: '任务已开始',
+        failedToExecute: '无法执行任务',
+        sessionEnded: '会话已结束',
     },
 
     // Confirm Dialogs

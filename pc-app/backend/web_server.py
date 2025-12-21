@@ -103,11 +103,23 @@ current_task = {
     "can_stop": False,
     "task_id": None,
     "logs": [],  # 原始日志
+    "waiting_for_input": False,  # 是否等待用户输入
+    "waiting_message": "",  # 等待输入的提示消息
+}
+
+# 会话状态（多轮对话支持）
+current_session = {
+    "agent": None,  # CustomPhoneAgent 实例
+    "session_id": None,  # 会话ID
+    "model_config": None,  # 模型配置
+    "task_history": [],  # 任务历史
 }
 
 task_queue = []
 task_thread = None
 stop_flag = False
+user_input_event = threading.Event()  # 用于等待用户输入
+user_input_value = ""  # 用户输入的内容
 
 
 class StreamLogger:
@@ -181,6 +193,9 @@ class HumanizedActionHandler(ActionHandler):
         # 添加随机偏移
         start_x, start_y = self._add_random_offset(start_x, start_y)
         end_x, end_y = self._add_random_offset(end_x, end_y)
+
+        # 调试：显示实际执行坐标
+        print(f"🎲 Humanized Swipe: ({start_x}, {start_y}) → ({end_x}, {end_y})")
 
         device_factory = get_device_factory()
         device_factory.swipe(start_x, start_y, end_x, end_y, device_id=self.device_id)
@@ -579,44 +594,101 @@ def steps_callback(step_data):
         )
 
 
-def execute_task(task, task_id):
-    global current_task, stop_flag
+def execute_task(task, task_id, is_continue=False):
+    """执行任务
+
+    Args:
+        task: 任务描述
+        task_id: 任务ID
+        is_continue: 是否为继续对话（True=追问/回复，False=新任务）
+    """
+    global current_task, current_session, stop_flag
 
     try:
         current_task["running"] = True
-        current_task["task"] = task
         current_task["status"] = "running"
-        current_task["steps"] = []
-        current_task["realtime_log"] = ""  # Initialize realtime log
-        current_task["current_step"] = 0
         current_task["can_stop"] = True
-        current_task["task_id"] = task_id
+        current_task["waiting_for_input"] = False
+        current_task["waiting_message"] = ""
         stop_flag = False
 
-        model_config = ModelConfig(
-            base_url=CONFIG["base_url"],
-            model_name=CONFIG["model_name"],
-            api_key=CONFIG["api_key"],
-        )
+        if not is_continue:
+            # 新任务：重置状态
+            current_task["task"] = task
+            current_task["steps"] = []
+            current_task["realtime_log"] = ""
+            current_task["current_step"] = 0
+            current_task["task_id"] = task_id
+            current_session["task_history"] = [task]
 
-        agent = CustomPhoneAgent(model_config=model_config)
-        agent.set_steps_callback(steps_callback)
-        agent.set_stop_check(lambda: stop_flag)
+            # 创建新的 agent
+            model_config = ModelConfig(
+                base_url=CONFIG["base_url"],
+                model_name=CONFIG["model_name"],
+                api_key=CONFIG["api_key"],
+            )
 
-        # Set raw callback for realtime logging
-        def raw_log_callback(text):
-            global current_task
-            if "realtime_log" not in current_task:
-                current_task["realtime_log"] = ""
-            current_task["realtime_log"] += text
+            agent = CustomPhoneAgent(model_config=model_config)
+            agent.set_steps_callback(steps_callback)
+            agent.set_stop_check(lambda: stop_flag)
 
-        agent.set_raw_callback(raw_log_callback)
+            # Set raw callback
+            def raw_log_callback(text):
+                global current_task
+                if "realtime_log" not in current_task:
+                    current_task["realtime_log"] = ""
+                current_task["realtime_log"] += text
 
-        result = agent.run(task)
+            agent.set_raw_callback(raw_log_callback)
+
+            # 保存到会话
+            current_session["agent"] = agent
+            current_session["session_id"] = task_id
+            current_session["model_config"] = model_config
+
+            result = agent.run(task)
+        else:
+            # 继续对话：使用现有 agent
+            agent = current_session.get("agent")
+            if not agent:
+                raise Exception("No active session to continue")
+
+            # 追加到任务历史
+            current_session["task_history"].append(task)
+            current_task["task"] = task  # 更新当前任务显示
+
+            # 添加用户消息到 steps
+            steps_callback(
+                {
+                    "type": "user_message",
+                    "content": task,
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                }
+            )
+
+            # 构建带上下文的 prompt
+            # 包含之前的任务历史和上一轮的结果
+            prev_tasks = current_session.get("task_history", [])[:-1]  # 排除当前
+            prev_result = current_task.get("result", "")
+
+            context_prompt = f"""**任务上下文**:
+之前的任务: {' → '.join(prev_tasks) if prev_tasks else '无'}
+上一轮结果: {prev_result}
+
+**用户追问**: {task}
+
+请基于以上上下文继续执行用户的新指令。"""
+
+            # 继续执行（带上下文）
+            result = agent.run(context_prompt)
 
         current_task["result"] = result
-        current_task["status"] = "success"
-        save_history(task, result, "success", current_task["steps"])
+        current_task["status"] = (
+            "completed"  # 改为 completed 而不是 success，表示可追问
+        )
+
+        # 不清除 session，允许追问
+        # save_history 改为只在用户明确结束时保存
 
     except Exception as e:
         error_msg = f"执行失败: {str(e)}"
@@ -629,12 +701,11 @@ def execute_task(task, task_id):
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
             }
         )
-        save_history(task, error_msg, "error", current_task["steps"])
+        # 保留 session 即使出错，允许重试
 
     finally:
         current_task["running"] = False
         current_task["can_stop"] = False
-        current_task["task_id"] = None
 
 
 def process_queue():
@@ -791,7 +862,92 @@ def api_status():
             "current_step": current_task["current_step"],
             "can_stop": current_task["can_stop"],
             "queue_length": len(task_queue),
-            "task_id": current_task["task_id"],
+            "task_id": current_task.get("task_id"),
+            # 多轮对话相关
+            "waiting_for_input": current_task.get("waiting_for_input", False),
+            "waiting_message": current_task.get("waiting_message", ""),
+            "has_session": current_session.get("agent") is not None,
+            "can_continue": (
+                not current_task["running"]
+                and current_session.get("agent") is not None
+                and current_task.get("status") in ["completed", "error"]
+            ),
+        }
+    )
+
+
+@app.route("/api/continue", methods=["POST"])
+def api_continue():
+    """继续当前会话（追问/回复）"""
+    data = request.json
+    message = data.get("message", "").strip()
+
+    if not message:
+        return jsonify({"success": False, "message": "消息不能为空"})
+
+    if current_task["running"]:
+        return jsonify({"success": False, "message": "当前有任务正在执行"})
+
+    if not current_session.get("agent"):
+        return jsonify({"success": False, "message": "没有活跃的会话，请先发起新任务"})
+
+    # 在后台线程中继续执行
+    try:
+        task_id = current_task.get("task_id") or str(int(time.time() * 1000))
+        thread = threading.Thread(target=execute_task, args=(message, task_id, True))
+        thread.daemon = True
+        thread.start()
+    except Exception as e:
+        return jsonify({"success": False, "message": f"继续任务失败: {str(e)}"})
+
+    return jsonify({"success": True, "message": "继续执行中"})
+
+
+@app.route("/api/session/end", methods=["POST"])
+def api_session_end():
+    """结束当前会话并保存历史"""
+    global current_session, current_task
+
+    if current_task["running"]:
+        return jsonify({"success": False, "message": "任务正在执行中"})
+
+    # 保存历史记录
+    if current_session.get("task_history"):
+        task_summary = " → ".join(current_session["task_history"])
+        save_history(
+            task_summary,
+            current_task.get("result", "会话结束"),
+            "success",
+            current_task.get("steps", []),
+        )
+
+    # 清除会话
+    current_session = {
+        "agent": None,
+        "session_id": None,
+        "model_config": None,
+        "task_history": [],
+    }
+
+    # 重置任务状态
+    current_task["status"] = "idle"
+    current_task["task_id"] = None
+
+    return jsonify({"success": True, "message": "会话已结束"})
+
+
+@app.route("/api/session/status", methods=["GET"])
+def api_session_status():
+    """获取会话状态"""
+    return jsonify(
+        {
+            "success": True,
+            "has_session": current_session.get("agent") is not None,
+            "session_id": current_session.get("session_id"),
+            "task_history": current_session.get("task_history", []),
+            "can_continue": (
+                not current_task["running"] and current_session.get("agent") is not None
+            ),
         }
     )
 

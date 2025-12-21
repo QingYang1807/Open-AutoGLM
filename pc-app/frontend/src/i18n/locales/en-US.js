@@ -113,6 +113,12 @@ const enUS = {
         failedToRemove: 'Failed to remove item',
         taskRestored: 'Task restored',
         autoBackupComplete: 'Auto backup completed',
+        // Multi-turn
+        continuingTask: 'Continuing task...',
+        failedToContinue: 'Failed to continue task',
+        taskStarted: 'Task started',
+        failedToExecute: 'Failed to execute task',
+        sessionEnded: 'Session ended',
     },
 
     // Confirm Dialogs

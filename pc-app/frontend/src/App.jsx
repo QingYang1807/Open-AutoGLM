@@ -518,16 +518,48 @@ export default function Layout() {
         toast.error(t('toast.networkErrorChat'));
       }
     } else {
-      // Phone mode - add to task queue for phone control
+      // Phone mode - 手机控制模式
+      const task = inputTask.trim();
+      setInputTask('');
+
       try {
-        const res = await api.addToQueue(inputTask);
-        if (res.success) {
-          setInputTask('');
-          loadQueue();
-          toast.success(t('toast.taskAddedToQueue'));
-          checkStatus();
+        // 检查是否有活跃会话可以继续
+        if (status.can_continue) {
+          // 继续会话（追问）
+          const res = await api.continueSession(task);
+          if (res.success) {
+            toast.success(t('toast.continuingTask'));
+            checkStatus();
+          } else {
+            toast.error(res.message || t('toast.failedToContinue'));
+          }
+        } else if (!status.running) {
+          // 新任务
+          const res = await api.executeTask(task);
+          if (res.success) {
+            toast.success(t('toast.taskStarted'));
+            checkStatus();
+          } else {
+            // 如果正在执行，添加到队列
+            if (res.message?.includes('队列')) {
+              const queueRes = await api.addToQueue(task);
+              if (queueRes.success) {
+                loadQueue();
+                toast.success(t('toast.taskAddedToQueue'));
+              }
+            } else {
+              toast.error(res.message || t('toast.failedToExecute'));
+            }
+          }
         } else {
-          toast.error(res.message || t('toast.failedToAdd'));
+          // 正在运行，添加到队列
+          const res = await api.addToQueue(task);
+          if (res.success) {
+            loadQueue();
+            toast.success(t('toast.taskAddedToQueue'));
+          } else {
+            toast.error(res.message || t('toast.failedToAdd'));
+          }
         }
       } catch (e) {
         toast.error(t('toast.networkErrorTask'));
