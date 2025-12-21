@@ -10,6 +10,7 @@ import json
 import threading
 import re
 import time
+import random
 from datetime import datetime
 from pathlib import Path
 from collections import Counter
@@ -21,6 +22,8 @@ from collections import Counter
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from phone_agent import PhoneAgent
 from phone_agent.model import ModelConfig
+from phone_agent.actions.handler import ActionHandler, ActionResult
+from phone_agent.device_factory import get_device_factory
 
 app = Flask(__name__)
 
@@ -151,6 +154,65 @@ class StreamLogger:
         self.buffer = ""
 
 
+class HumanizedActionHandler(ActionHandler):
+    """人性化ActionHandler，添加随机偏移避免被识别为机器操作"""
+
+    def __init__(self, *args, offset_range: int = 15, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.offset_range = offset_range  # 随机偏移范围(像素)
+
+    def _add_random_offset(self, x: int, y: int) -> tuple[int, int]:
+        """添加随机偏移，模拟人类操作"""
+        x += random.randint(-self.offset_range, self.offset_range)
+        y += random.randint(-self.offset_range, self.offset_range)
+        return max(0, x), max(0, y)  # 确保不负
+
+    def _handle_swipe(self, action: dict, width: int, height: int) -> ActionResult:
+        """人性化滑动操作，添加随机偏移"""
+        start = action.get("start")
+        end = action.get("end")
+
+        if not start or not end:
+            return ActionResult(False, False, "Missing swipe coordinates")
+
+        start_x, start_y = self._convert_relative_to_absolute(start, width, height)
+        end_x, end_y = self._convert_relative_to_absolute(end, width, height)
+
+        # 添加随机偏移
+        start_x, start_y = self._add_random_offset(start_x, start_y)
+        end_x, end_y = self._add_random_offset(end_x, end_y)
+
+        device_factory = get_device_factory()
+        device_factory.swipe(start_x, start_y, end_x, end_y, device_id=self.device_id)
+        return ActionResult(True, False)
+
+    def _handle_tap(self, action: dict, width: int, height: int) -> ActionResult:
+        """人性化点击操作，添加小范围随机偏移"""
+        element = action.get("element")
+        if not element:
+            return ActionResult(False, False, "No element coordinates")
+
+        x, y = self._convert_relative_to_absolute(element, width, height)
+
+        # 点击偏移小一些(±5像素)
+        x += random.randint(-5, 5)
+        y += random.randint(-5, 5)
+        x, y = max(0, x), max(0, y)
+
+        # Check for sensitive operation
+        if "message" in action:
+            if not self.confirmation_callback(action["message"]):
+                return ActionResult(
+                    success=False,
+                    should_finish=True,
+                    message="User cancelled sensitive operation",
+                )
+
+        device_factory = get_device_factory()
+        device_factory.tap(x, y, self.device_id)
+        return ActionResult(True, False)
+
+
 class CustomPhoneAgent(PhoneAgent):
     """自定义Agent，捕获详细执行信息"""
 
@@ -159,6 +221,13 @@ class CustomPhoneAgent(PhoneAgent):
         self.steps_callback = None
         self.stop_check_callback = None
         self.raw_callback = None
+
+        # 替换为人性化ActionHandler
+        self.action_handler = HumanizedActionHandler(
+            device_id=(
+                self.agent_config.device_id if hasattr(self, "agent_config") else None
+            )
+        )
 
         # Intercept model client request
         self._original_request = self.model_client.request
