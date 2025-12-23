@@ -15,6 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from collections import Counter
 
+# Add project root to Python path to allow importing phone_agent
+# This allows the script to be run from any directory
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 # Note: Windows encoding is handled by launcher.py SafeWriter
 # Do not modify sys.stdout/stderr here as they may already be wrapped
 
@@ -24,6 +30,7 @@ from phone_agent import PhoneAgent
 from phone_agent.model import ModelConfig
 from phone_agent.actions.handler import ActionHandler, ActionResult
 from phone_agent.device_factory import get_device_factory
+from license import LicenseManager, LicenseError
 
 app = Flask(__name__)
 
@@ -36,6 +43,9 @@ load_dotenv()
 # 配置文件路径
 DATA_DIR = Path(os.environ.get("AUTOGLM_DATA_DIR", Path(__file__).parent))
 CONFIG_FILE = DATA_DIR / "config.json"
+
+# 初始化授权管理器
+license_manager = LicenseManager(DATA_DIR)
 
 # 检测是否为打包环境
 IS_PACKAGED = getattr(sys, "frozen", False)
@@ -605,6 +615,20 @@ def execute_task(task, task_id, is_continue=False):
     global current_task, current_session, stop_flag
 
     try:
+        # ⚠️ 授权校验 - 在执行层拦截
+        if not license_manager.IsValid():
+            is_valid, message, _ = license_manager.CheckLicense()
+            error_msg = f"授权验证失败: {message}"
+            current_task["running"] = False
+            current_task["status"] = "error"
+            current_task["result"] = error_msg
+            current_task["steps"].append({
+                "type": "error",
+                "content": error_msg,
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+            })
+            return
+        
         current_task["running"] = True
         current_task["status"] = "running"
         current_task["can_stop"] = True
@@ -1657,6 +1681,65 @@ def api_chat():
     except Exception as e:
         print(f"[Chat API] Unexpected error: {e}")
         return jsonify({"success": False, "message": "🔥 产品太火爆啦！请稍后再试～"})
+
+
+# ========== 授权管理 API ==========
+
+@app.route("/api/license/info", methods=["GET"])
+def api_license_info():
+    """获取授权信息"""
+    try:
+        info = license_manager.GetLicenseInfo()
+        return jsonify({"success": True, "info": info})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/license/activate", methods=["POST"])
+def api_license_activate():
+    """激活授权码"""
+    data = request.json
+    license_code = data.get("license_code", "").strip()
+    
+    if not license_code:
+        return jsonify({"success": False, "message": "授权码不能为空"})
+    
+    try:
+        success, message = license_manager.Activate(license_code)
+        if success:
+            info = license_manager.GetLicenseInfo()
+            return jsonify({"success": True, "message": message, "info": info})
+        else:
+            return jsonify({"success": False, "message": message})
+    except LicenseError as e:
+        return jsonify({"success": False, "message": str(e)})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"激活失败: {str(e)}"})
+
+
+@app.route("/api/license/check", methods=["GET"])
+def api_license_check():
+    """检查授权状态"""
+    try:
+        is_valid, message, license_data = license_manager.CheckLicense()
+        return jsonify({
+            "success": True,
+            "is_valid": is_valid,
+            "message": message,
+            "license_data": license_data
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/license/machine-id", methods=["GET"])
+def api_license_machine_id():
+    """获取机器码"""
+    try:
+        machine_id = license_manager.machine_id
+        return jsonify({"success": True, "machine_id": machine_id})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
 
 if __name__ == "__main__":

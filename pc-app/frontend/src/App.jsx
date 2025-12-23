@@ -6,11 +6,12 @@ import LogViewer from './components/log-viewer/LogViewer';
 import SettingsModal from './components/SettingsModal';
 import TrashModal from './components/TrashModal';
 import ShortcutsModal from './components/ShortcutsModal';
+import LicenseModal from './components/LicenseModal';
 import { Toaster, toast } from 'react-hot-toast';
 import {
   Play, StopCircle, Plus, Clock, List, Search,
   Trash2, ChevronDown, ChevronRight, MoreVertical,
-  RefreshCw, XCircle, Settings, MessageSquare, Smartphone, Globe, Zap
+  RefreshCw, XCircle, Settings, MessageSquare, Smartphone, Globe, Zap, CheckCircle
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useLanguage } from './i18n/i18n.jsx';
@@ -202,6 +203,8 @@ export default function Layout() {
   const [showSettings, setShowSettings] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showLicense, setShowLicense] = useState(false);
+  const [licenseValid, setLicenseValid] = useState(true);
 
   // Execution Mode: 'chat' (Q&A) or 'phone' (Phone Control)
   const [executionMode, setExecutionMode] = useState('phone');
@@ -217,6 +220,7 @@ export default function Layout() {
   useEffect(() => {
     loadAllData();
     startPolling();
+    CheckLicenseStatus();
 
     // Check if API key is configured
     const config = storage.getConfig();
@@ -230,6 +234,30 @@ export default function Layout() {
 
     return () => stopPolling();
   }, []);
+
+  // Check license status periodically
+  useEffect(() => {
+    const licenseCheckInterval = setInterval(() => {
+      CheckLicenseStatus();
+    }, 60000); // Check every minute
+
+    return () => clearInterval(licenseCheckInterval);
+  }, []);
+
+  const CheckLicenseStatus = async () => {
+    try {
+      const res = await api.checkLicense();
+      if (res.success) {
+        setLicenseValid(res.is_valid);
+        if (!res.is_valid && status.running) {
+          // If license invalid and task is running, show warning
+          toast.error(`授权验证失败: ${res.message}`);
+        }
+      }
+    } catch (e) {
+      console.error('License check failed:', e);
+    }
+  };
 
   // Auto backup timer
   useEffect(() => {
@@ -473,6 +501,13 @@ export default function Layout() {
   // Actions
   const handleExecute = async () => {
     if (!inputTask.trim()) return;
+
+    // Check license before execution
+    if (!licenseValid) {
+      toast.error('授权验证失败，请先激活授权');
+      setShowLicense(true);
+      return;
+    }
 
     if (executionMode === 'chat') {
       // Chat mode - multi-turn Q&A without phone control
@@ -766,6 +801,12 @@ export default function Layout() {
         onUseShortcut={(command) => setInputTask(command)}
       />
 
+      {/* License Modal */}
+      <LicenseModal
+        isOpen={showLicense}
+        onClose={() => setShowLicense(false)}
+      />
+
       {/* Sidebar */}
       <div className="w-80 bg-background-secondary border-r border-white/5 flex flex-col shrink-0">
         <div className="p-5 border-b border-white/5">
@@ -974,6 +1015,20 @@ export default function Layout() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* License Status Indicator */}
+            <button
+              onClick={() => setShowLicense(true)}
+              className={clsx(
+                "px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5",
+                licenseValid
+                  ? "bg-status-success/10 text-status-success border border-status-success/20 hover:bg-status-success/20"
+                  : "bg-status-error/10 text-status-error border border-status-error/20 hover:bg-status-error/20 animate-pulse"
+              )}
+              title={licenseValid ? '授权有效' : '授权无效，点击查看'}
+            >
+              {licenseValid ? <CheckCircle size={14} /> : <XCircle size={14} />}
+              <span>{licenseValid ? '已授权' : '未授权'}</span>
+            </button>
             {/* Language Toggle */}
             <button
               title={locale === 'zh-CN' ? 'Switch to English' : '切换到中文'}

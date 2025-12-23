@@ -219,5 +219,30 @@ export const api = {
             body: JSON.stringify({ shortcuts })
         });
         return res.json();
+    },
+
+    // License Management
+    getLicenseInfo: async () => {
+        const res = await fetch(`${API_BASE}/license/info`);
+        return res.json();
+    },
+
+    activateLicense: async (licenseCode) => {
+        const res = await fetch(`${API_BASE}/license/activate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ license_code: licenseCode })
+        });
+        return res.json();
+    },
+
+    checkLicense: async () => {
+        const res = await fetch(`${API_BASE}/license/check`);
+        return res.json();
+    },
+
+    getMachineId: async () => {
+        const res = await fetch(`${API_BASE}/license/machine-id`);
+        return res.json();
     }
 };
